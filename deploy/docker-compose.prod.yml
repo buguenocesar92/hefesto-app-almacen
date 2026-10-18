@@ -1,0 +1,306 @@
+# ---------------------------------------------------------------------------
+# Gestion de Almacen: entorno de PRODUCCION
+# ---------------------------------------------------------------------------
+#
+# Uso:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod up -d
+#
+# DIFERENCIAS CON DESARROLLO QUE IMPORTAN
+# ---------------------------------------
+#  1. SOLO Caddy publica puertos (80 y 443). La API, la web, PostgreSQL,
+#     Redis y Authentik no son accesibles desde la red: solo se hablan entre
+#     ellos por la red interna de Docker.
+#  2. El codigo va DENTRO de la imagen. No hay volumen con el codigo: si el
+#     host se compromete, el atacante no gana acceso al codigo fuente.
+#  3. Los secretos vienen del `.env.prod`, que no se versiona.
+#  4. Los servicios tienen limite de reinicio y de registros.
+#
+# LO QUE ESTE ARCHIVO NO HACE
+# ---------------------------
+#  - No respalda la base de datos. Ver docs/08.
+#  - No aplica migraciones en cada arranque: se aplican una vez, a mano. Un
+#    despliegue que cambia el esquema sin que nadie lo decida es un
+#    despliegue que puede cortar el servicio.
+#
+# ---------------------------------------------------------------------------
+
+name: almacen
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # -------------------------------------------------------------------------
+  # Caddy: el unico puerto abierto del sistema.
+  # -------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-datos:/data
+      - caddy-config:/config
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?falta ACME_EMAIL en el .env.prod}
+    depends_on:
+      - api
+      - web
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+  # -------------------------------------------------------------------------
+  # API.
+  # -------------------------------------------------------------------------
+  api:
+    image: ${API_IMAGE:?falta API_IMAGE en el .env.prod}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_NAME: "Almacén Hefesto"
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY:?falta APP_KEY en el .env.prod}
+      APP_URL: ${APP_URL:?falta APP_URL en el .env.prod}
+      APP_WEB_URL: ${APP_WEB_URL:?falta APP_WEB_URL en el .env.prod}
+      # En produccion la cookie de sesion DEBE ir por HTTPS.
+      SESSION_SECURE_COOKIE: "true"
+      SESSION_SAME_SITE: lax
+      SESSION_DRIVER: database
+
+      LOG_CHANNEL: stack
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_STACK: daily
+      LOG_DAILY_DAYS: "30"
+
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-almacen}
+      DB_USERNAME: ${DB_USERNAME:?falta DB_USERNAME en el .env.prod}
+      DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en el .env.prod}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER:?falta AUTHENTIK_ISSUER en el .env.prod}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:?falta AUTHENTIK_CLIENT_ID en el .env.prod}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:?falta AUTHENTIK_CLIENT_SECRET en el .env.prod}
+      AUTHENTIK_REDIRECT_URI: ${AUTHENTIK_REDIRECT_URI:?falta AUTHENTIK_REDIRECT_URI en el .env.prod}
+      AUTHENTIK_SCOPES: ${AUTHENTIK_SCOPES:-openid profile email}
+      AUTHENTIK_ALGORITMO: ${AUTHENTIK_ALGORITMO:-RS256}
+
+      ALMACEN_HORAS_VALIDEZ_RESERVA: ${ALMACEN_HORAS_VALIDEZ_RESERVA:-72}
+      ALMACEN_DIAS_ENTRE_CONTEO: ${ALMACEN_DIAS_ENTRE_CONTEO:-30}
+
+      # Las migraciones NO se corren en cada arranque de este servicio.
+      ALMACEN_CORRER_MIGRACIONES: "false"
+    volumes:
+      - storage-temporal:/var/www/html/storage/framework
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-s", "http://localhost:8080/api/v1/salud"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+  # -------------------------------------------------------------------------
+  # Planificador y trabajador de colas: misma imagen, otro comando.
+  #
+  # Es el unico proceso que libera las reservas vencidas. Si este contenedor
+  # se cae, el almacen sigue despachando, pero la mercaderia de los pedidos
+  # que nadie confirma queda comprometida. Por eso tiene su propio
+  # reinicio y su propio limite.
+  # -------------------------------------------------------------------------
+  cola:
+    image: ${API_IMAGE:?falta API_IMAGE en el .env.prod}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command:
+      ["php", "artisan", "schedule:work"]
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY}
+      APP_URL: ${APP_URL}
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-almacen}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: database
+      LOG_CHANNEL: stderr
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER}
+    volumes:
+      - storage-temporal:/var/www/html/storage/framework
+    logging: *logging
+
+  # -------------------------------------------------------------------------
+  # Interfaz.
+  # -------------------------------------------------------------------------
+  web:
+    image: ${WEB_IMAGE:?falta WEB_IMAGE en el .env.prod}
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NUXT_API_BASE: http://api:8080
+      NUXT_PUBLIC_BASE: ${APP_WEB_URL}
+    logging: *logging
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL.
+  #
+  # Sin puerto publicado: la base no es accesible desde afuera del host, ni
+  # siquiera desde la red local. Para entrar hay que usar un tunel SSH.
+  # -------------------------------------------------------------------------
+  # DOS ROLES, Y NO UNO
+  # -------------------
+  # `POSTGRES_USER` es el rol de ARRANQUE: la imagen oficial ejecuta
+  # `initdb --username="$POSTGRES_USER"` y ese rol nace superusuario. Solo
+  # se usa para crear la base y para las tareas administrativas. La
+  # aplicacion NUNCA conecta con el.
+  #
+  # El rol de la aplicacion (`DB_USERNAME`) lo crea
+  # `deploy/postgres/inicializar-rol.sh` al inicializar el volumen, con
+  # NOSUPERUSER y NOBYPASSRLS explicitos. Le da la propiedad de la base
+  # para que las migraciones de Laravel puedan crear el esquema.
+  #
+  # POR QUE IMPORTA: la documentacion de PostgreSQL 18 dice que los
+  # superusuarios "always bypass the row security system", y que
+  # `FORCE ROW LEVEL SECURITY` sujeta solo al DUENO de la tabla, no al
+  # superusuario. Con un solo rol las politicas no se aplicarian y el
+  # aislamiento entre empresas seria decorativo. Ver docs/03.
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-almacen}
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-almacen_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD en el .env.prod}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque.
+      APP_DB_ROLE: ${DB_USERNAME:-almacen_app}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en el .env.prod}
+    volumes:
+      - postgres-datos:/var/lib/postgresql/data
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-almacen_app} -d ${DB_DATABASE:-almacen}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  redis:
+    image: redis:8.8.3-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${REDIS_PASSWORD:?falta REDIS_PASSWORD en el .env.prod}"]
+    volumes:
+      - redis-datos:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  # -------------------------------------------------------------------------
+  # Authentik 2025.10: `server` + `worker` con la misma imagen, y su propia
+  # base de datos. Sin Redis (Authentik lo elimino en 2025.10).
+  #
+  # La interfaz de administracion de Authentik NO se publica. Para entrar hay
+  # que usar un tunel SSH hasta el puerto 9000 del contenedor:
+  #
+  #   docker compose exec -it authentik-server ak shell
+  #   ssh -L 9000:localhost:9000 usuario@servidor
+  # -------------------------------------------------------------------------
+  authentik-postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AUTHENTIK_POSTGRESQL__NAME:-authentik}
+      POSTGRES_USER: ${AUTHENTIK_POSTGRESQL__USER:-authentik}
+      POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRESQL__PASSWORD}
+    volumes:
+      - authentik-postgres-datos:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTHENTIK_POSTGRESQL__USER:-authentik}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2025.10
+    restart: unless-stopped
+    command: server
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?falta AUTHENTIK_SECRET_KEY en el .env.prod}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRESQL__USER:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL__PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRESQL__NAME:-authentik}
+      AUTHENTIK_BOOTSTRAP__EMAIL: ${AUTHENTIK_BOOTSTRAP__EMAIL}
+      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP__PASSWORD}
+      AUTHENTIK_BOOTSTRAP__TOKEN: ${AUTHENTIK_BOOTSTRAP__TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik-media:/media
+    logging: *logging
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2025.10
+    restart: unless-stopped
+    command: worker
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRESQL__USER:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRESQL__PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRESQL__NAME:-authentik}
+      AUTHENTIK_BOOTSTRAP__EMAIL: ${AUTHENTIK_BOOTSTRAP__EMAIL}
+      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP__PASSWORD}
+      AUTHENTIK_BOOTSTRAP__TOKEN: ${AUTHENTIK_BOOTSTRAP__TOKEN}
+    volumes:
+      - authentik-media:/media
+    logging: *logging
+
+volumes:
+  postgres-datos:
+  redis-datos:
+  authentik-postgres-datos:
+  authentik-media:
+  storage-temporal:
+  caddy-datos:
+  caddy-config:

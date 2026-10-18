@@ -1,0 +1,15 @@
+# Dependencias y artefactos de la interfaz (Nuxt)
+
+/node_modules/
+/.nuxt/
+/.output/
+/.data/
+/dist/
+
+# Variables de entorno reales. La plantilla si.
+/.env
+.env.*
+!.env.example
+
+# Pruebas y cobertura
+/coverage/

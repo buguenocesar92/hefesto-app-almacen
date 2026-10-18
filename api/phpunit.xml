@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Configuracion de PHPUnit de Gestion de Almacen.
+
+    Las suites estan separadas a proposito, porque no todas pesan lo mismo:
+
+      - `Aislamiento`: que una empresa no vea los datos de otra. Si esto
+        falla, todo lo demas da igual.
+      - `Stock`: que el stock no se pueda editar sin movimiento y que las
+        reservas vencidas liberen la unidad.
+      - `Unidades`: la conversion caja/unidad. No necesita base de datos.
+
+    Se pueden correr solas:
+      php artisan test --testsuite=Aislamiento
+      php artisan test --testsuite=Stock
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="true"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Aislamiento">
+            <directory>tests/Feature/Aislamiento</directory>
+        </testsuite>
+        <testsuite name="Stock">
+            <directory>tests/Feature/Stock</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+        <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="CACHE_STORE" value="array"/>
+        <env name="MAIL_MAILER" value="array"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SESSION_DRIVER" value="array"/>
+        <!--
+            Base de datos de pruebas.
+
+            IMPORTANTE: debe ser PostgreSQL, no SQLite. El aislamiento entre
+            empresas esta implementado con Row Level Security y la
+            inmutabilidad del stock con gatillos: en SQLite esas pruebas
+            pasarian sin comprobar nada. Ver docs/10.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="almacen_test"/>
+        <env name="DB_USERNAME" value="almacen_app"/>
+        <env name="DB_PASSWORD" value=""/>
+        <env name="DB_HOST" value="127.0.0.1"/>
+        <env name="DB_PORT" value="5432"/>
+        <env name="REDIS_HOST" value="127.0.0.1"/>
+        <env name="AUTHENTIK_ISSUER" value="https://id.ejemplo.cl/application/o/almacen/"/>
+        <env name="AUTHENTIK_CLIENT_ID" value="almacen-pruebas"/>
+        <env name="AUTHENTIK_CLIENT_SECRET" value="secreto-de-pruebas-no-real"/>
+        <env name="AUTHENTIK_REDIRECT_URI" value="http://localhost:8000/api/v1/acceso/callback"/>
+    </php>
+</phpunit>

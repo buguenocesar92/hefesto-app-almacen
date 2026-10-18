@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# Caddy: unico punto de entrada publico del almacen.
+# ---------------------------------------------------------------------------
+# El navegador habla solo con Caddy. Caddy reparte:
+#
+#   /api/**      -> contenedor `api` (Laravel)
+#   todo lo demas -> contenedor `web` (Nuxt)
+#
+# POR QUE EL NAVEGADOR NO HABLA DIRECTO CON LA API
+# -----------------------------------------------
+# La sesion viaja en una cookie HttpOnly + Secure + SameSite=Lax. Con una
+# cookie asi, el navegador solo la envia a SU MISMO origen. Si la API
+# respondiera en otro origen, habria que resolver CORS con credenciales y el
+# token CSRF se volveria mas fragil. Al meter todo en un solo origen, la
+# cookie viaja sola y el CSRF se resuelve con la cabecera `X-XSRF-TOKEN`.
+#
+# En un almacen esto no es purismo: confirmar una recepcion, cerrar un conteo
+# o despachar un pedido escriben en el stock. Que esas acciones no puedan
+# falsificarse con una peticion suelta desde otro sitio es lo que las hace
+# confiables, y por eso todo pasa por un solo origen con CSRF.
+# ---------------------------------------------------------------------------
+
+{
+	email {$ACME_EMAIL:admin@hefestostudio.cl}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# El almacen no tiene Embebidos ni iframes: se puede cerrar del todo.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'"
+		-Server
+	}
+}
+
+# Puerto 80 solo para la redireccion y la validacion del certificado.
+:80 {
+	redir {
+		to https://{host}{uri}
+	}
+}
+
+almacen.hefestostudio.cl {
+	encode zstd gzip
+
+	# ------------------------------------------------------------------------
+	# La API.
+	# ------------------------------------------------------------------------
+	handle /api/* {
+		reverse_proxy api:8080 {
+			transport http {
+				read_timeout 60s
+			}
+		}
+	}
+
+	# ------------------------------------------------------------------------
+	# Comprobacion de salud interna. NO es publica: se responde sin proxy para
+	# que el orquestador y el operador puedan revisarla sin pasar por la
+	# aplicacion.
+	# ------------------------------------------------------------------------
+	handle /salud-interna* {
+		respond "ok" 200
+	}
+
+	# ------------------------------------------------------------------------
+	# La interfaz.
+	# ------------------------------------------------------------------------
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# Si Hefesto usa certificado propio, descomentar y montar los archivos:
+	#
+	# tls /etc/caddy/certs/almacen.crt /etc/caddy/certs/almacen.key
+	#
+	log {
+		output file /var/log/caddy/acceso.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+		format json
+	}
+}

@@ -1,0 +1,111 @@
+/*
+ * Estilos comunes de la interfaz del almacen.
+ *
+ * Son pocos y a proposito: en un almacen se usa la pantalla con guantes,
+ * con luz mala y con apuro. Botones grandes, texto grande, contraste alto y
+ * numeros alineados a la derecha para que se comparen de un vistazo.
+ */
+
+:root {
+  --color-texto: #1f2933;
+  --color-suave: #627d98;
+  --color-linea: #e4e7eb;
+  --color-primario: #2b6cb0;
+  --color-fondo: #f0f4f8;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--color-texto);
+  font-size: 16px;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin-bottom: 0.5rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin-top: 1.5rem;
+}
+
+a {
+  color: var(--color-primario);
+}
+
+code {
+  font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', monospace;
+  font-size: 0.9em;
+}
+
+/* Botones: grandes, porque se usan con guantes. */
+.boton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--color-primario);
+  border-radius: 0.375rem;
+  background: #ffffff;
+  color: var(--color-primario);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.boton:hover {
+  background: #f0f7ff;
+}
+
+.boton--principal {
+  background: var(--color-primario);
+  color: #ffffff;
+}
+
+.boton--principal:hover {
+  background: #22548c;
+}
+
+.boton--discreto {
+  border-color: var(--color-linea);
+  color: var(--color-texto);
+}
+
+.boton--discreto:hover {
+  background: var(--color-fondo);
+}
+
+/* Formularios */
+input,
+select,
+textarea {
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #cbd2d9;
+  border-radius: 0.375rem;
+  background: #ffffff;
+  color: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-primario);
+  outline-offset: 2px;
+}
+
+/* Las tres cifras del stock, siempre con la misma jerarquia. */
+.numero {
+  font-variant-numeric: tabular-nums;
+}
